@@ -1,456 +1,476 @@
 mod server;
 
-use server::{DEFAULT_ENVIRONMENT, ENVIRONMENTS};
 use server::Server;
+use server::{DEFAULT_ENVIRONMENT, ENVIRONMENTS};
 
 use eframe::egui;
-use tokio::sync::mpsc;
+use std::collections::HashMap;
 use std::io::Write;
+use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
-struct StreamStatus {
-    is_streaming: bool,
+struct DownloadStatus {
+    is_downloading: bool,
     error_message: Option<String>,
     total_bytes_received: usize,
     chunks_received: usize,
 }
 
-enum StreamEvent {
-    ServerConnected,
-    ChunkReceived { size: usize },
-    StreamComplete,
-    StreamError { error: String },
+#[derive(Debug, Clone)]
+struct DownloadItem {
+    address: String,
+    status: DownloadStatus,
+    save_path: Option<std::path::PathBuf>,
+    file_size: usize,
+    created_at: std::time::SystemTime,
 }
 
-struct AntubeApp {
-    server: Option<Server>,
+enum DownloadEvent {
+    Started { id: String },
+    ChunkReceived { id: String, size: usize },
+    Completed { id: String },
+    Error { id: String, error: String },
+}
+
+struct AntDownloadApp {
     address_input: String,
     selected_env: String,
     is_connecting: bool,
-    stream_status: StreamStatus,
-    stream_receiver: Option<mpsc::UnboundedReceiver<StreamEvent>>,
-    video_temp_path: Option<std::path::PathBuf>,
-    is_playing: bool,
-    current_file_size: usize,
+    downloads: HashMap<String, DownloadItem>,
+    download_receiver: mpsc::UnboundedReceiver<DownloadEvent>,
+    download_sender: mpsc::UnboundedSender<DownloadEvent>,
 }
 
-impl Default for AntubeApp {
+impl Default for AntDownloadApp {
     fn default() -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
         Self {
-            server: None,
             address_input: String::new(),
             selected_env: DEFAULT_ENVIRONMENT.to_string(),
             is_connecting: false,
-            stream_status: StreamStatus {
-                is_streaming: false,
-                error_message: None,
-                total_bytes_received: 0,
-                chunks_received: 0,
-            },
-            stream_receiver: None,
-            video_temp_path: None,
-            is_playing: false,
-            current_file_size: 0,
+            downloads: HashMap::new(),
+            download_receiver: rx,
+            download_sender: tx,
         }
     }
 }
 
-impl eframe::App for AntubeApp {
+impl eframe::App for AntDownloadApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Request continuous repaints while streaming
-        if self.stream_status.is_streaming || self.is_connecting {
+        // Request continuous repaints while any downloads are active
+        if self.is_connecting || self.downloads.values().any(|d| d.status.is_downloading) {
             ctx.request_repaint();
         }
 
-        // Initialize server if needed (lazy initialization)
-        if self.server.is_none() && !self.is_connecting && !self.address_input.trim().is_empty() {
-            // Only connect when user actually wants to stream
-        }
-
-        // Process stream events
-        if let Some(receiver) = &mut self.stream_receiver {
-            while let Ok(event) = receiver.try_recv() {
-                match event {
-                    StreamEvent::ServerConnected => {
-                        self.is_connecting = false;
-                        self.stream_status.is_streaming = true;
+        // Process download events
+        while let Ok(event) = self.download_receiver.try_recv() {
+            match event {
+                DownloadEvent::Started { id } => {
+                    if let Some(download) = self.downloads.get_mut(&id) {
+                        download.status.is_downloading = true;
+                        download.status.error_message = None;
                     }
-                    StreamEvent::ChunkReceived { size } => {
-                        self.stream_status.chunks_received += 1;
-                        self.stream_status.total_bytes_received += size;
-                        self.current_file_size += size;
+                    self.is_connecting = false;
+                }
+                DownloadEvent::ChunkReceived { id, size } => {
+                    if let Some(download) = self.downloads.get_mut(&id) {
+                        download.status.chunks_received += 1;
+                        download.status.total_bytes_received += size;
+                        download.file_size += size;
                     }
-                    StreamEvent::StreamComplete => {
-                        self.stream_status.is_streaming = false;
-                        self.is_connecting = false;
+                }
+                DownloadEvent::Completed { id } => {
+                    if let Some(download) = self.downloads.get_mut(&id) {
+                        download.status.is_downloading = false;
                     }
-                    StreamEvent::StreamError { error } => {
-                        self.stream_status.is_streaming = false;
-                        self.is_connecting = false;
-                        self.stream_status.error_message = Some(error);
+                }
+                DownloadEvent::Error { id, error } => {
+                    if let Some(download) = self.downloads.get_mut(&id) {
+                        download.status.is_downloading = false;
+                        download.status.error_message = Some(error);
                     }
+                    self.is_connecting = false;
                 }
             }
         }
 
-        // Main UI with scroll area to ensure everything fits
+        // Main UI
         egui::CentralPanel::default().show(ctx, |ui| {
-            let available_height = ui.available_height();
-            
-            ui.vertical_centered(|ui| {
+            ui.vertical(|ui| {
                 ui.add_space(10.0);
 
-                // Address input with controls in one row
+                // Top bar with address input and download button
                 ui.horizontal(|ui| {
                     ui.label("Address:");
                     let response = ui.add_sized(
-                        [300.0, 22.0],
+                        [400.0, 22.0],
                         egui::TextEdit::singleline(&mut self.address_input)
-                            .hint_text("Enter video address...")
+                            .hint_text("Enter file address..."),
                     );
-                    
+
                     // Environment selector
-                    egui::ComboBox::from_label("Env")
+                    egui::ComboBox::from_label("🌐")
                         .selected_text(&self.selected_env)
                         .show_ui(ui, |ui| {
                             for env in ENVIRONMENTS {
                                 ui.selectable_value(&mut self.selected_env, env.to_string(), env);
                             }
                         });
-                    
-                    if ui.button("Stream").clicked() && !self.address_input.trim().is_empty() {
-                        self.connect_and_stream();
-                    }
-                    
-                    ui.add_space(15.0);
-                    
-                    // Only keep essential action buttons
-                    let file_available = self.video_temp_path.is_some() && self.current_file_size > 0;
-                    ui.add_enabled_ui(file_available, |ui| {
-                        if ui.small_button("💾").clicked() {
-                            self.save_video_data();
+
+                    let download_enabled =
+                        !self.address_input.trim().is_empty() && !self.is_connecting;
+                    ui.add_enabled_ui(download_enabled, |ui| {
+                        if ui.button("Download").clicked() {
+                            self.start_download();
                         }
                     });
-                    
-                    ui.add_enabled_ui(file_available, |ui| {
-                        let button_text = if self.is_playing { "⏸" } else { "▶" };
-                        if ui.small_button(button_text).clicked() {
-                            self.toggle_play_pause();
-                        }
-                    });
-                    
-                    // Show status inline on the same row
-                    ui.add_space(20.0);
+
+                    // Status indicator
                     if self.is_connecting {
-                        ui.add(egui::Spinner::new().size(10.0));
-                        ui.label(egui::RichText::new("Connecting...").size(10.0).color(egui::Color32::YELLOW));
-                    } else if self.stream_status.is_streaming {
-                        ui.add(egui::Spinner::new().size(10.0));
-                        ui.label(egui::RichText::new(self.format_file_size(self.stream_status.total_bytes_received).to_string()).size(10.0).color(egui::Color32::GREEN));
-                    } else if let Some(_error) = &self.stream_status.error_message {
-                        ui.label(egui::RichText::new("Error").size(10.0).color(egui::Color32::RED));
-                    } else if self.stream_status.total_bytes_received > 0 {
-                        ui.label(egui::RichText::new(self.format_file_size(self.stream_status.total_bytes_received).to_string()).size(10.0).color(egui::Color32::LIGHT_BLUE));
+                        ui.add(egui::Spinner::new().size(12.0));
+                        ui.label(
+                            egui::RichText::new("Starting...")
+                                .size(10.0)
+                                .color(egui::Color32::YELLOW),
+                        );
                     }
-                    
+
                     // Auto-focus on startup
                     if self.address_input.is_empty() {
                         response.request_focus();
                     }
                 });
-                
+
+                ui.add_space(10.0);
+                ui.separator();
                 ui.add_space(5.0);
-                
-                // Player screen - maximize to fill remaining space
-                let remaining_height = available_height - 50.0; // Minimal space for top controls
-                self.show_player_screen_full(ui, remaining_height.max(400.0));
+
+                // Downloads list
+                self.show_downloads_list(ui);
             });
         });
     }
 }
 
-impl AntubeApp {
-    fn connect_and_stream(&mut self) {
-        // Clear previous state
-        self.current_file_size = 0;
-        self.video_temp_path = None;
-        self.is_connecting = true;
-        self.stream_status = StreamStatus {
-            is_streaming: false,
-            error_message: None,
-            total_bytes_received: 0,
-            chunks_received: 0,
+impl AntDownloadApp {
+    fn start_download(&mut self) {
+        let address = self.address_input.trim().to_string();
+        if address.is_empty() {
+            return;
+        }
+
+        let save_path = match rfd::FileDialog::new()
+            .set_title("Save Downloaded File As")
+            .save_file()
+        {
+            Some(path) => path,
+            None => return, // User cancelled
         };
-        
-        // Create temp file for streaming
-        let temp_dir = std::env::temp_dir();
-        let temp_file = temp_dir.join(format!("antube_stream_{}.mp4", 
+
+        // Generate unique download ID
+        let download_id = format!(
+            "{}_{}",
+            address.chars().take(8).collect::<String>(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_secs()));
-        
-        let address = self.address_input.clone();
-        let (server_tx, mut server_rx) = mpsc::unbounded_channel();
-        
-        // Spawn server initialization task
+                .as_millis()
+                % 10000
+        );
+
+        // Create download item
+        let download_item = DownloadItem {
+            address: address.clone(),
+            status: DownloadStatus {
+                is_downloading: false,
+                error_message: None,
+                total_bytes_received: 0,
+                chunks_received: 0,
+            },
+            save_path: Some(save_path.clone()),
+            file_size: 0,
+            created_at: std::time::SystemTime::now(),
+        };
+
+        self.downloads.insert(download_id.clone(), download_item);
+        self.is_connecting = true;
+
+        // Start download task
         let env = self.selected_env.clone();
+        let tx = self.download_sender.clone();
+
         tokio::spawn(async move {
-            let result = Server::new(&env).await;
-            let _ = server_tx.send(result);
-        });
-        
-        let (stream_tx, stream_rx) = mpsc::unbounded_channel();
-        self.stream_receiver = Some(stream_rx);
-        self.video_temp_path = Some(temp_file.clone());
-        
-        // Spawn the connection and streaming task
-        tokio::spawn(async move {
-            // Wait for server to initialize
-            match server_rx.recv().await {
-                Some(Ok(server)) => {
-                    let _ = stream_tx.send(StreamEvent::ServerConnected);
-                    
-                    // Create/open temp file for writing
-                    match std::fs::File::create(&temp_file) {
+            // Initialize server
+            match Server::new(&env).await {
+                Ok(server) => {
+                    let _ = tx.send(DownloadEvent::Started {
+                        id: download_id.clone(),
+                    });
+
+                    // Create/open save file directly
+                    match std::fs::File::create(&save_path) {
                         Ok(mut file) => {
-                            // Start streaming
+                            // Start downloading
                             match server.stream_data(&address).await {
                                 Ok(stream) => {
                                     for chunk_result in stream {
                                         match chunk_result {
                                             Ok(chunk) => {
-                                                // Write chunk directly to temp file
+                                                // Write chunk directly to save file
                                                 if let Err(e) = file.write_all(&chunk) {
-                                                    let _ = stream_tx.send(StreamEvent::StreamError { 
-                                                        error: format!("Failed to write to temp file: {e}")
+                                                    let _ = tx.send(DownloadEvent::Error {
+                                                        id: download_id.clone(),
+                                                        error: format!("Failed to write file: {e}"),
                                                     });
                                                     return;
                                                 }
-                                                
-                                                if stream_tx.send(StreamEvent::ChunkReceived { size: chunk.len() }).is_err() {
+
+                                                if tx
+                                                    .send(DownloadEvent::ChunkReceived {
+                                                        id: download_id.clone(),
+                                                        size: chunk.len(),
+                                                    })
+                                                    .is_err()
+                                                {
                                                     break;
                                                 }
                                             }
                                             Err(error) => {
-                                                let _ = stream_tx.send(StreamEvent::StreamError { error });
+                                                let _ = tx.send(DownloadEvent::Error {
+                                                    id: download_id.clone(),
+                                                    error,
+                                                });
                                                 return;
                                             }
                                         }
                                     }
-                                    
-                                    // Flush and close file
+
+                                    // Flush and complete
                                     if let Err(e) = file.flush() {
-                                        let _ = stream_tx.send(StreamEvent::StreamError { 
-                                            error: format!("Failed to flush temp file: {e}")
+                                        let _ = tx.send(DownloadEvent::Error {
+                                            id: download_id.clone(),
+                                            error: format!("Failed to flush file: {e}"),
                                         });
                                         return;
                                     }
-                                    
-                                    let _ = stream_tx.send(StreamEvent::StreamComplete);
+
+                                    let _ = tx.send(DownloadEvent::Completed { id: download_id });
                                 }
                                 Err(error) => {
-                                    let _ = stream_tx.send(StreamEvent::StreamError { error });
+                                    let _ = tx.send(DownloadEvent::Error {
+                                        id: download_id,
+                                        error,
+                                    });
                                 }
                             }
                         }
                         Err(e) => {
-                            let _ = stream_tx.send(StreamEvent::StreamError { 
-                                error: format!("Failed to create temp file: {e}")
+                            let _ = tx.send(DownloadEvent::Error {
+                                id: download_id,
+                                error: format!("Failed to create save file: {e}"),
                             });
                         }
                     }
                 }
-                Some(Err(error)) => {
-                    let _ = stream_tx.send(StreamEvent::StreamError { error });
-                }
-                None => {
-                    let _ = stream_tx.send(StreamEvent::StreamError { 
-                        error: "Server initialization failed".to_string() 
+                Err(error) => {
+                    let _ = tx.send(DownloadEvent::Error {
+                        id: download_id,
+                        error,
                     });
                 }
             }
         });
+
+        // Clear input for next download
+        self.address_input.clear();
     }
-    
-    fn show_player_screen_full(&mut self, ui: &mut egui::Ui, max_height: f32) {
-        // Use all available space - player goes to bottom of window
-        let available_width = ui.available_width();
-        let player_height = max_height;
-        let player_size = egui::Vec2::new(available_width, player_height);
-        
-        ui.allocate_ui_with_layout(
-            player_size,
-            egui::Layout::centered_and_justified(egui::Direction::TopDown),
-            |ui| {
-                let (_rect, response) = ui.allocate_exact_size(player_size, egui::Sense::click());
-                
-                // Draw the player background - fill entire area
-                ui.painter().rect_filled(
-                    response.rect,
-                    egui::Rounding::same(4.0),
-                    egui::Color32::from_rgb(10, 10, 10)
+
+    fn show_downloads_list(&mut self, ui: &mut egui::Ui) {
+        if self.downloads.is_empty() {
+            ui.vertical_centered(|ui| {
+                ui.add_space(50.0);
+                ui.label(
+                    egui::RichText::new("📥")
+                        .color(egui::Color32::GRAY)
+                        .size(60.0),
                 );
-                
-                // Draw subtle border
-                ui.painter().rect_stroke(
-                    response.rect,
-                    egui::Rounding::same(4.0),
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(40, 40, 40))
+                ui.add_space(10.0);
+                ui.label(
+                    egui::RichText::new("Ant Download")
+                        .color(egui::Color32::GRAY)
+                        .size(24.0),
                 );
-                
-                // Content inside the player
-                let content_rect = response.rect.shrink(20.0);
-                ui.allocate_ui_at_rect(content_rect, |ui| {
-                    ui.centered_and_justified(|ui| {
-                        if self.stream_status.is_streaming {
-                            ui.vertical_centered(|ui| {
-                                ui.add(egui::Spinner::new().size(40.0));
-                                ui.add_space(15.0);
-                                ui.label(egui::RichText::new("Streaming video...")
-                                    .color(egui::Color32::WHITE)
-                                    .size(24.0));
-                                if self.stream_status.total_bytes_received > 0 {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new(format!("{} received", 
-                                        self.format_file_size(self.stream_status.total_bytes_received)))
-                                        .color(egui::Color32::GRAY)
-                                        .size(16.0));
-                                }
-                            });
-                        } else if self.video_temp_path.is_some() && self.current_file_size > 0 {
-                            ui.vertical_centered(|ui| {
-                                let status_text = if self.is_playing { "▶ Playing" } else { "⏸ Ready to Play" };
-                                ui.label(egui::RichText::new("🎬")
-                                    .color(egui::Color32::WHITE)
-                                    .size(80.0));
-                                ui.add_space(15.0);
-                                ui.label(egui::RichText::new(status_text)
-                                    .color(egui::Color32::WHITE)
-                                    .size(28.0));
-                                ui.add_space(10.0);
-                                ui.label(egui::RichText::new(format!("File size: {}", 
-                                    self.format_file_size(self.current_file_size)))
-                                    .color(egui::Color32::GRAY)
-                                    .size(18.0));
-                            });
-                        } else if self.is_connecting {
-                            ui.vertical_centered(|ui| {
-                                ui.add(egui::Spinner::new().size(30.0));
-                                ui.add_space(15.0);
-                                ui.label(egui::RichText::new("Connecting to network...")
-                                    .color(egui::Color32::YELLOW)
-                                    .size(20.0));
-                            });
-                        } else {
-                            ui.vertical_centered(|ui| {
-                                ui.label(egui::RichText::new("📺")
-                                    .color(egui::Color32::GRAY)
-                                    .size(80.0));
-                                ui.add_space(15.0);
-                                ui.label(egui::RichText::new("AnTube Player")
-                                    .color(egui::Color32::GRAY)
-                                    .size(28.0));
-                                ui.add_space(10.0);
-                                ui.label(egui::RichText::new("Enter a video address above to start streaming")
-                                    .color(egui::Color32::DARK_GRAY)
-                                    .size(16.0));
-                            });
-                        }
-                    });
+                ui.add_space(5.0);
+                ui.label(
+                    egui::RichText::new("Enter a file address above to start downloading")
+                        .color(egui::Color32::DARK_GRAY)
+                        .size(14.0),
+                );
+            });
+            return;
+        }
+
+        // Sort downloads by creation time (newest first)
+        let mut sorted_downloads: Vec<_> = self.downloads.iter().collect();
+        sorted_downloads.sort_by(|a, b| b.1.created_at.cmp(&a.1.created_at));
+
+        egui::ScrollArea::vertical()
+            .max_height(ui.available_height() - 20.0)
+            .show(ui, |ui| {
+                for (_, download) in sorted_downloads {
+                    self.show_download_item(ui, download);
+                    ui.add_space(5.0);
+                }
+            });
+    }
+
+    fn show_download_item(&self, ui: &mut egui::Ui, download: &DownloadItem) {
+        let frame = egui::Frame::default()
+            .fill(egui::Color32::from_rgb(40, 40, 45))
+            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 65)))
+            .rounding(egui::Rounding::same(6.0))
+            .inner_margin(egui::Margin::same(12.0));
+
+        frame.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                // Status indicator
+                if download.status.is_downloading {
+                    ui.add(egui::Spinner::new().size(16.0));
+                } else if download.status.error_message.is_some() {
+                    ui.label(egui::RichText::new("❌").size(16.0));
+                } else if download.file_size > 0 {
+                    ui.label(egui::RichText::new("✅").size(16.0));
+                } else {
+                    ui.label(egui::RichText::new("⏸").size(16.0));
+                }
+
+                ui.add_space(8.0);
+
+                // Download info
+                ui.vertical(|ui| {
+                    // Filename and address
+                    let filename = download.save_path
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown");
+                    
+                    let display_address = download.address.clone();
+                    
+                    let display_text = format!("{} - {}", filename, display_address);
+                    ui.label(
+                        egui::RichText::new(display_text)
+                            .color(egui::Color32::WHITE)
+                            .size(13.0),
+                    );
+
+                    ui.add_space(2.0);
+
+                    // Status and size
+                    if let Some(error) = &download.status.error_message {
+                        ui.label(
+                            egui::RichText::new(format!("Error: {error}"))
+                                .color(egui::Color32::LIGHT_RED)
+                                .size(11.0),
+                        );
+                    } else if download.status.is_downloading {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Downloading... {}",
+                                self.format_file_size(download.file_size)
+                            ))
+                            .color(egui::Color32::YELLOW)
+                            .size(11.0),
+                        );
+                    } else if download.file_size > 0 {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Completed - {}",
+                                self.format_file_size(download.file_size)
+                            ))
+                            .color(egui::Color32::LIGHT_GREEN)
+                            .size(11.0),
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new("Waiting...")
+                                .color(egui::Color32::GRAY)
+                                .size(11.0),
+                        );
+                    }
                 });
-            }
-        );
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Action buttons
+                    let file_ready = download.file_size > 0
+                        && download
+                            .save_path
+                            .as_ref()
+                            .map(|p| p.exists())
+                            .unwrap_or(false);
+
+                    // Play button (only for media files)
+                    if file_ready && self.is_media_file(download) {
+                        if ui.small_button("▶ Play").clicked() {
+                            self.play_download(download);
+                        }
+                    }
+                });
+            });
+        });
     }
-    
-    fn toggle_play_pause(&mut self) {
-        if self.video_temp_path.is_some() && self.current_file_size > 0 {
-            self.is_playing = !self.is_playing;
-            
-            if self.is_playing {
-                self.play_in_system_player();
+
+    fn is_media_file(&self, download: &DownloadItem) -> bool {
+        if let Some(save_path) = &download.save_path {
+            if let Some(extension) = save_path.extension().and_then(|e| e.to_str()) {
+                let ext = extension.to_lowercase();
+                matches!(
+                    ext.as_str(),
+                    "mp4" | "mov" | "avi" | "mkv" | "webm" | "mp3" | "wav" | "flac" | "ogg" | "m4a"
+                )
             } else {
-                // For now, we can't actually pause system player
-                // This is a limitation of the current approach
-                println!("Pause requested (system player control limited)");
+                false
             }
+        } else {
+            false
         }
     }
-    
-    fn play_in_system_player(&mut self) {
-        if let Some(temp_file) = &self.video_temp_path {
-            if temp_file.exists() && self.current_file_size > 0 {
+
+    fn play_download(&self, download: &DownloadItem) {
+        if let Some(save_file) = &download.save_path {
+            if save_file.exists() && download.file_size > 0 {
                 #[cfg(target_os = "macos")]
                 {
-                    let _ = std::process::Command::new("open")
-                        .arg(temp_file)
-                        .spawn();
+                    let _ = std::process::Command::new("open").arg(&save_file).spawn();
                 }
-                
+
                 #[cfg(target_os = "windows")]
                 {
                     let _ = std::process::Command::new("cmd")
-                        .args(["/C", "start", "", &temp_file.to_string_lossy()])
+                        .args(["/C", "start", "", &save_file.to_string_lossy()])
                         .spawn();
                 }
-                
+
                 #[cfg(target_os = "linux")]
                 {
                     let _ = std::process::Command::new("xdg-open")
-                        .arg(&temp_file)
+                        .arg(&save_file)
                         .spawn();
                 }
-            } else {
-                println!("Temp file not found or empty: {temp_file:?}");
             }
         }
     }
-    
-    fn save_video_data(&self) {
-        if let Some(temp_file) = &self.video_temp_path {
-            if !temp_file.exists() || self.current_file_size == 0 {
-                println!("❌ No video data to save");
-                return;
-            }
-            
-            let address_short = if self.address_input.len() > 8 {
-                &self.address_input[..8]
-            } else {
-                &self.address_input
-            };
-            let suggested_filename = format!("antube_{address_short}.mp4");
-            
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("Video Files", &["mp4", "mov", "avi", "mkv", "webm"])
-                .add_filter("All Files", &["*"])
-                .set_file_name(&suggested_filename)
-                .set_title("Save Downloaded Video")
-                .save_file() 
-            {
-                match std::fs::copy(temp_file, &path) {
-                    Ok(_) => {
-                        println!("✅ Video saved to: {}", path.display());
-                    }
-                    Err(e) => {
-                        println!("❌ Failed to save: {e}");
-                    }
-                }
-            }
-        } else {
-            println!("❌ No video data available to save");
-        }
-    }
-    
+
     fn format_file_size(&self, bytes: usize) -> String {
         const UNITS: &[&str] = &["B", "KB", "MB", "GB"];
         let mut size = bytes as f64;
         let mut unit_index = 0;
-        
+
         while size >= 1024.0 && unit_index < UNITS.len() - 1 {
             size /= 1024.0;
             unit_index += 1;
         }
-        
+
         if unit_index == 0 {
             format!("{} {}", bytes, UNITS[unit_index])
         } else {
@@ -463,14 +483,14 @@ impl AntubeApp {
 async fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("AnTube - Autonomi Video Streamer")
-            .with_inner_size([800.0, 600.0]),
+            .with_title("Ant Download")
+            .with_inner_size([900.0, 700.0]),
         ..Default::default()
     };
 
     eframe::run_native(
-        "AnTube",
+        "Ant Download",
         options,
-        Box::new(|_cc| Box::new(AntubeApp::default())),
+        Box::new(|_cc| Box::new(AntDownloadApp::default())),
     )
 }

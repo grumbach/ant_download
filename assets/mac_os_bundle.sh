@@ -1,18 +1,18 @@
 #!/bin/bash
 
-# Script to create a mac os bundle for the antube binary
+# Script to create a mac os bundle for the ant_download binary
 #
 # BINARY_PATH is the path to the binary to be bundled, it can be provided as an environment variable:
 #
-# BINARY_PATH=./target/release/antube ./mac_os_bundle.sh
+# BINARY_PATH=./target/release/ant_download ./mac_os_bundle.sh
 #
 # If the desired binary path is not provided, the default path will be used
 
-APP_NAME="Antube"
+APP_NAME="AntDownload"
 ICON_PATH="./assets/ant_down.icns"
 
 if [ -z "$BINARY_PATH" ]; then
-    BINARY_PATH="./target/release/antube"  # this one is the default path
+    BINARY_PATH="./target/release/ant_download"  # this one is the default path
 fi
 
 # Create the .app structure

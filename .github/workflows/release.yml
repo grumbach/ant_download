@@ -57,14 +57,14 @@ jobs:
       - name: Package binary
         run: |
           cd target/${{ matrix.target }}/release
-          zip Antube-${{ matrix.target }}.zip antube
+          zip AntDownload-${{ matrix.target }}.zip ant_download
           cd ../../..
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/Antube-${{ matrix.target }}.zip
+          path: target/${{ matrix.target }}/release/AntDownload-${{ matrix.target }}.zip
 
   macos-release:
     if: contains(github.event.head_commit.message, '[release]')
@@ -98,19 +98,19 @@ jobs:
 
       - name: Set executable permissions
         run: |
-          chmod +x target/${{ matrix.target }}/release/antube
+          chmod +x target/${{ matrix.target }}/release/ant_download
 
       - name: Create .app bundle
         run: |
           chmod +x ./assets/mac_os_bundle.sh
-          BINARY_PATH="./target/${{ matrix.target }}/release/antube" ./assets/mac_os_bundle.sh
-          ditto -c -k --keepParent Antube.app Antube-${{ matrix.target }}.zip
+          BINARY_PATH="./target/${{ matrix.target }}/release/ant_download" ./assets/mac_os_bundle.sh
+          ditto -c -k --keepParent AntDownload.app AntDownload-${{ matrix.target }}.zip
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: Antube-${{ matrix.target }}.zip
+          path: AntDownload-${{ matrix.target }}.zip
 
   create-release:
     name: Create Release
@@ -162,7 +162,7 @@ jobs:
             - Linux (x86_64, aarch64)
             - MacOS (x86_64, aarch64)
 
-            > Mac users might face quarantine issues: `"Antube.app" is damaged and can't be opened. You should move it to the Trash.`
+            > Mac users might face quarantine issues: `"AntDownload.app" is damaged and can't be opened. You should move it to the Trash.`
             > To fix this:
             > 1. **Unzip** the file (double-click the `.zip`).
             > 2. Open **Terminal** (press `Cmd + Space`, type "Terminal", and press Enter).
@@ -172,13 +172,13 @@ jobs:
             >   ```
             > 4. Remove macOS quarantine flag:
             >   ```bash
-            >   xattr -rd com.apple.quarantine Antube.app
+            >   xattr -rd com.apple.quarantine AntDownload.app
             >   ```
-            > 5. Double-click **Antube.app** to open it!
+            > 5. Double-click **AntDownload.app** to open it!
           draft: false
           prerelease: false
           files: |
-            x86_64-unknown-linux-musl/Antube-x86_64-unknown-linux-musl.zip
-            aarch64-unknown-linux-musl/Antube-aarch64-unknown-linux-musl.zip
-            x86_64-apple-darwin/Antube-x86_64-apple-darwin.zip
-            aarch64-apple-darwin/Antube-aarch64-apple-darwin.zip
+            x86_64-unknown-linux-musl/AntDownload-x86_64-unknown-linux-musl.zip
+            aarch64-unknown-linux-musl/AntDownload-aarch64-unknown-linux-musl.zip
+            x86_64-apple-darwin/AntDownload-x86_64-apple-darwin.zip
+            aarch64-apple-darwin/AntDownload-aarch64-apple-darwin.zip

@@ -1,4 +1,4 @@
-# Antube
+# Ant Download
 
 Download files from the Autonomi Network — one click to eternal access.
 
@@ -10,9 +10,9 @@ Liberate the world's knowledge — access it from anywhere
 
 ## Download it
 
-[Download the latest release on github with a click!](https://github.com/maidsafe/antube/releases/latest) 
+[Download the latest release on github with a click!](https://github.com/maidsafe/ant_download/releases/latest) 
 
-> Mac users might face quarantine issues: `"Antube.app" is damaged and can't be opened. You should move it to the Trash.`
+> Mac users might face quarantine issues: `"AntDownload.app" is damaged and can't be opened. You should move it to the Trash.`
 >
 > This happens because we don't have a $99 a year Apple Developer account :(
 >
@@ -25,9 +25,9 @@ Liberate the world's knowledge — access it from anywhere
 >   ```
 > 4. Remove macOS quarantine flag:
 >   ```bash
->   xattr -rd com.apple.quarantine Antube.app
+>   xattr -rd com.apple.quarantine AntDownload.app
 >   ```
-> 5. Double-click **Antube.app** to open it!
+> 5. Double-click **AntDownload.app** to open it!
 
 ## Build it from source
 
@@ -37,13 +37,13 @@ git clone https://github.com/maidsafe/autonomi.git
 cd autonomi
 git checkout main
 
-# go back into the antube directory
-cd ../antube
+# go back into the ant_download directory
+cd ../ant_download
 
 # build the release version of the app
 cargo build --release
 
-# (for macOS) make a Antube.app
+# (for macOS) make a AntDownload.app
 bash ./assets/mac_os_bundle.sh
 ```
 
