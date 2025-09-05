@@ -70,7 +70,12 @@ impl Default for AntDownloadApp {
 impl eframe::App for AntDownloadApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Request continuous repaints while any downloads are active
-        if self.is_connecting || self.downloads.values().any(|d| matches!(d.status.state, DownloadState::Downloading)) {
+        if self.is_connecting
+            || self
+                .downloads
+                .values()
+                .any(|d| matches!(d.status.state, DownloadState::Downloading))
+        {
             ctx.request_repaint();
         }
 
@@ -269,7 +274,10 @@ impl AntDownloadApp {
                                                     });
                                                 }
                                             }
-                                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                                            tokio::time::sleep(tokio::time::Duration::from_millis(
+                                                100,
+                                            ))
+                                            .await;
                                         }
 
                                         match chunk_result {
@@ -415,15 +423,16 @@ impl AntDownloadApp {
                 // Download info
                 ui.vertical(|ui| {
                     // Filename and address
-                    let filename = download.save_path
+                    let filename = download
+                        .save_path
                         .as_ref()
                         .and_then(|p| p.file_name())
                         .and_then(|n| n.to_str())
                         .unwrap_or("unknown");
-                    
+
                     let display_address = download.address.clone();
-                    
-                    let display_text = format!("{} - {}", filename, display_address);
+
+                    let display_text = format!("{filename} - {display_address}");
                     ui.label(
                         egui::RichText::new(display_text)
                             .color(egui::Color32::WHITE)
@@ -550,7 +559,7 @@ impl AntDownloadApp {
             if save_file.exists() && download.file_size > 0 {
                 #[cfg(target_os = "macos")]
                 {
-                    let _ = std::process::Command::new("open").arg(&save_file).spawn();
+                    let _ = std::process::Command::new("open").arg(save_file).spawn();
                 }
 
                 #[cfg(target_os = "windows")]

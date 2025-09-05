@@ -912,6 +912,7 @@ dependencies = [
 [[package]]
 name = "ant-bootstrap"
 version = "0.2.7"
+source = "git+https://github.com/grumbach/autonomi.git?branch=data_stream#c97da3fc1504206dab73b8fd7f6ebc09428706b7"
 dependencies = [
  "ant-logging",
  "ant-protocol",
@@ -934,6 +935,7 @@ dependencies = [
 [[package]]
 name = "ant-build-info"
 version = "0.1.29"
+source = "git+https://github.com/grumbach/autonomi.git?branch=data_stream#c97da3fc1504206dab73b8fd7f6ebc09428706b7"
 dependencies = [
  "chrono",
  "tracing",
@@ -943,6 +945,7 @@ dependencies = [
 [[package]]
 name = "ant-evm"
 version = "0.1.17"
+source = "git+https://github.com/grumbach/autonomi.git?branch=data_stream#c97da3fc1504206dab73b8fd7f6ebc09428706b7"
 dependencies = [
  "custom_debug",
  "evmlib",
@@ -963,6 +966,7 @@ dependencies = [
 [[package]]
 name = "ant-logging"
 version = "0.2.52"
+source = "git+https://github.com/grumbach/autonomi.git?branch=data_stream#c97da3fc1504206dab73b8fd7f6ebc09428706b7"
 dependencies = [
  "chrono",
  "dirs-next",
@@ -979,6 +983,7 @@ dependencies = [
 [[package]]
 name = "ant-protocol"
 version = "1.0.8"
+source = "git+https://github.com/grumbach/autonomi.git?branch=data_stream#c97da3fc1504206dab73b8fd7f6ebc09428706b7"
 dependencies = [
  "ant-build-info",
  "ant-evm",
@@ -1617,6 +1622,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 [[package]]
 name = "autonomi"
 version = "0.6.0"
+source = "git+https://github.com/grumbach/autonomi.git?branch=data_stream#c97da3fc1504206dab73b8fd7f6ebc09428706b7"
 dependencies = [
  "ant-bootstrap",
  "ant-evm",
@@ -3133,6 +3139,7 @@ dependencies = [
 [[package]]
 name = "evmlib"
 version = "0.4.3"
+source = "git+https://github.com/grumbach/autonomi.git?branch=data_stream#c97da3fc1504206dab73b8fd7f6ebc09428706b7"
 dependencies = [
  "alloy",
  "rand 0.8.5",

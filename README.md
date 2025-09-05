@@ -56,12 +56,12 @@ cargo run --release
 ## For those diving into the code
 
 - The `src/server.rs` file contains the main logic for all autonomi network interaction
-- The `src/main.rs` contains the GUI front-end for the app
+- The `src/main.rs` contains the GUI front-end for the app (100% vibecoded)
 
 ## Features
 
 - Download files from the Autonomi Network using file addresses
-- Simple drag-and-drop interface
+- Simple copy-paste interface
 - Cross-platform support (Linux, macOS)
 - Free downloads forever
 
@@ -69,5 +69,4 @@ cargo run --release
 
 - Enhanced file management
 - Download history
-- Progress indicators
 - Suggest more features by submitting or upvoting an issue on github
