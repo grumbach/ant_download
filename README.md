@@ -8,6 +8,8 @@ Download files that were uploaded to the network forever.
 
 Liberate the world's knowledge — access it from anywhere
 
+![](./assets/ant_down.png)
+
 ## Download it
 
 [Download the latest release on github with a click!](https://github.com/maidsafe/ant_download/releases/latest) 
@@ -32,14 +34,6 @@ Liberate the world's knowledge — access it from anywhere
 ## Build it from source
 
 ```bash
-# clone the autonomi repo
-git clone https://github.com/maidsafe/autonomi.git 
-cd autonomi
-git checkout main
-
-# go back into the ant_download directory
-cd ../ant_download
-
 # build the release version of the app
 cargo build --release
 
