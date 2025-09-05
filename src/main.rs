@@ -9,9 +9,17 @@ use std::io::Write;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
+enum DownloadState {
+    Waiting,
+    Downloading,
+    Paused,
+    Completed,
+    Error(String),
+}
+
+#[derive(Debug, Clone)]
 struct DownloadStatus {
-    is_downloading: bool,
-    error_message: Option<String>,
+    state: DownloadState,
     total_bytes_received: usize,
     chunks_received: usize,
 }
@@ -29,6 +37,8 @@ enum DownloadEvent {
     Started { id: String },
     ChunkReceived { id: String, size: usize },
     Completed { id: String },
+    Paused { id: String },
+    Resumed { id: String },
     Error { id: String, error: String },
 }
 
@@ -39,6 +49,7 @@ struct AntDownloadApp {
     downloads: HashMap<String, DownloadItem>,
     download_receiver: mpsc::UnboundedReceiver<DownloadEvent>,
     download_sender: mpsc::UnboundedSender<DownloadEvent>,
+    pause_senders: HashMap<String, mpsc::UnboundedSender<bool>>,
 }
 
 impl Default for AntDownloadApp {
@@ -51,6 +62,7 @@ impl Default for AntDownloadApp {
             downloads: HashMap::new(),
             download_receiver: rx,
             download_sender: tx,
+            pause_senders: HashMap::new(),
         }
     }
 }
@@ -58,7 +70,7 @@ impl Default for AntDownloadApp {
 impl eframe::App for AntDownloadApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Request continuous repaints while any downloads are active
-        if self.is_connecting || self.downloads.values().any(|d| d.status.is_downloading) {
+        if self.is_connecting || self.downloads.values().any(|d| matches!(d.status.state, DownloadState::Downloading)) {
             ctx.request_repaint();
         }
 
@@ -67,8 +79,7 @@ impl eframe::App for AntDownloadApp {
             match event {
                 DownloadEvent::Started { id } => {
                     if let Some(download) = self.downloads.get_mut(&id) {
-                        download.status.is_downloading = true;
-                        download.status.error_message = None;
+                        download.status.state = DownloadState::Downloading;
                     }
                     self.is_connecting = false;
                 }
@@ -81,15 +92,28 @@ impl eframe::App for AntDownloadApp {
                 }
                 DownloadEvent::Completed { id } => {
                     if let Some(download) = self.downloads.get_mut(&id) {
-                        download.status.is_downloading = false;
+                        download.status.state = DownloadState::Completed;
+                    }
+                    // Clean up pause sender
+                    self.pause_senders.remove(&id);
+                }
+                DownloadEvent::Paused { id } => {
+                    if let Some(download) = self.downloads.get_mut(&id) {
+                        download.status.state = DownloadState::Paused;
+                    }
+                }
+                DownloadEvent::Resumed { id } => {
+                    if let Some(download) = self.downloads.get_mut(&id) {
+                        download.status.state = DownloadState::Downloading;
                     }
                 }
                 DownloadEvent::Error { id, error } => {
                     if let Some(download) = self.downloads.get_mut(&id) {
-                        download.status.is_downloading = false;
-                        download.status.error_message = Some(error);
+                        download.status.state = DownloadState::Error(error);
                     }
                     self.is_connecting = false;
+                    // Clean up pause sender
+                    self.pause_senders.remove(&id);
                 }
             }
         }
@@ -182,8 +206,7 @@ impl AntDownloadApp {
         let download_item = DownloadItem {
             address: address.clone(),
             status: DownloadStatus {
-                is_downloading: false,
-                error_message: None,
+                state: DownloadState::Waiting,
                 total_bytes_received: 0,
                 chunks_received: 0,
             },
@@ -195,11 +218,18 @@ impl AntDownloadApp {
         self.downloads.insert(download_id.clone(), download_item);
         self.is_connecting = true;
 
+        // Create pause channel
+        let (pause_tx, pause_rx) = mpsc::unbounded_channel();
+        self.pause_senders.insert(download_id.clone(), pause_tx);
+
         // Start download task
         let env = self.selected_env.clone();
         let tx = self.download_sender.clone();
 
         tokio::spawn(async move {
+            let mut pause_rx = pause_rx;
+            let mut is_paused = false;
+
             // Initialize server
             match Server::new(&env).await {
                 Ok(server) => {
@@ -214,6 +244,34 @@ impl AntDownloadApp {
                             match server.stream_data(&address).await {
                                 Ok(stream) => {
                                     for chunk_result in stream {
+                                        // Check for pause/resume commands
+                                        if let Ok(should_pause) = pause_rx.try_recv() {
+                                            if should_pause && !is_paused {
+                                                is_paused = true;
+                                                let _ = tx.send(DownloadEvent::Paused {
+                                                    id: download_id.clone(),
+                                                });
+                                            } else if !should_pause && is_paused {
+                                                is_paused = false;
+                                                let _ = tx.send(DownloadEvent::Resumed {
+                                                    id: download_id.clone(),
+                                                });
+                                            }
+                                        }
+
+                                        // If paused, wait until resumed
+                                        while is_paused {
+                                            if let Ok(should_pause) = pause_rx.try_recv() {
+                                                if !should_pause {
+                                                    is_paused = false;
+                                                    let _ = tx.send(DownloadEvent::Resumed {
+                                                        id: download_id.clone(),
+                                                    });
+                                                }
+                                            }
+                                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                                        }
+
                                         match chunk_result {
                                             Ok(chunk) => {
                                                 // Write chunk directly to save file
@@ -317,14 +375,14 @@ impl AntDownloadApp {
         egui::ScrollArea::vertical()
             .max_height(ui.available_height() - 20.0)
             .show(ui, |ui| {
-                for (_, download) in sorted_downloads {
-                    self.show_download_item(ui, download);
+                for (download_id, download) in sorted_downloads {
+                    self.show_download_item(ui, download_id, download);
                     ui.add_space(5.0);
                 }
             });
     }
 
-    fn show_download_item(&self, ui: &mut egui::Ui, download: &DownloadItem) {
+    fn show_download_item(&self, ui: &mut egui::Ui, download_id: &str, download: &DownloadItem) {
         let frame = egui::Frame::default()
             .fill(egui::Color32::from_rgb(40, 40, 45))
             .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 65)))
@@ -334,14 +392,22 @@ impl AntDownloadApp {
         frame.show(ui, |ui| {
             ui.horizontal(|ui| {
                 // Status indicator
-                if download.status.is_downloading {
-                    ui.add(egui::Spinner::new().size(16.0));
-                } else if download.status.error_message.is_some() {
-                    ui.label(egui::RichText::new("❌").size(16.0));
-                } else if download.file_size > 0 {
-                    ui.label(egui::RichText::new("✅").size(16.0));
-                } else {
-                    ui.label(egui::RichText::new("⏸").size(16.0));
+                match &download.status.state {
+                    DownloadState::Downloading => {
+                        ui.add(egui::Spinner::new().size(16.0));
+                    }
+                    DownloadState::Paused => {
+                        ui.label(egui::RichText::new("⏸").size(16.0));
+                    }
+                    DownloadState::Completed => {
+                        ui.label(egui::RichText::new("✅").size(16.0));
+                    }
+                    DownloadState::Error(_) => {
+                        ui.label(egui::RichText::new("❌").size(16.0));
+                    }
+                    DownloadState::Waiting => {
+                        ui.label(egui::RichText::new("⏳").size(16.0));
+                    }
                 }
 
                 ui.add_space(8.0);
@@ -367,42 +433,57 @@ impl AntDownloadApp {
                     ui.add_space(2.0);
 
                     // Status and size
-                    if let Some(error) = &download.status.error_message {
-                        ui.label(
-                            egui::RichText::new(format!("Error: {error}"))
-                                .color(egui::Color32::LIGHT_RED)
+                    match &download.status.state {
+                        DownloadState::Error(error) => {
+                            ui.label(
+                                egui::RichText::new(format!("Error: {error}"))
+                                    .color(egui::Color32::LIGHT_RED)
+                                    .size(11.0),
+                            );
+                        }
+                        DownloadState::Downloading => {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Downloading... {}",
+                                    self.format_file_size(download.file_size)
+                                ))
+                                .color(egui::Color32::YELLOW)
                                 .size(11.0),
-                        );
-                    } else if download.status.is_downloading {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "Downloading... {}",
-                                self.format_file_size(download.file_size)
-                            ))
-                            .color(egui::Color32::YELLOW)
-                            .size(11.0),
-                        );
-                    } else if download.file_size > 0 {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "Completed - {}",
-                                self.format_file_size(download.file_size)
-                            ))
-                            .color(egui::Color32::LIGHT_GREEN)
-                            .size(11.0),
-                        );
-                    } else {
-                        ui.label(
-                            egui::RichText::new("Waiting...")
-                                .color(egui::Color32::GRAY)
+                            );
+                        }
+                        DownloadState::Paused => {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Paused - {}",
+                                    self.format_file_size(download.file_size)
+                                ))
+                                .color(egui::Color32::from_rgb(255, 165, 0))
                                 .size(11.0),
-                        );
+                            );
+                        }
+                        DownloadState::Completed => {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Completed - {}",
+                                    self.format_file_size(download.file_size)
+                                ))
+                                .color(egui::Color32::LIGHT_GREEN)
+                                .size(11.0),
+                            );
+                        }
+                        DownloadState::Waiting => {
+                            ui.label(
+                                egui::RichText::new("Waiting...")
+                                    .color(egui::Color32::GRAY)
+                                    .size(11.0),
+                            );
+                        }
                     }
                 });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Action buttons
-                    let file_ready = download.file_size > 0
+                    let file_ready = matches!(download.status.state, DownloadState::Completed)
                         && download
                             .save_path
                             .as_ref()
@@ -414,10 +495,38 @@ impl AntDownloadApp {
                         if ui.small_button("▶ Play").clicked() {
                             self.play_download(download);
                         }
+                        ui.add_space(5.0);
+                    }
+
+                    // Pause/Resume button (only for active downloads)
+                    match &download.status.state {
+                        DownloadState::Downloading => {
+                            if ui.small_button("⏸ Pause").clicked() {
+                                self.pause_download(download_id);
+                            }
+                        }
+                        DownloadState::Paused => {
+                            if ui.small_button("▶ Resume").clicked() {
+                                self.resume_download(download_id);
+                            }
+                        }
+                        _ => {}
                     }
                 });
             });
         });
+    }
+
+    fn pause_download(&self, download_id: &str) {
+        if let Some(pause_sender) = self.pause_senders.get(download_id) {
+            let _ = pause_sender.send(true);
+        }
+    }
+
+    fn resume_download(&self, download_id: &str) {
+        if let Some(pause_sender) = self.pause_senders.get(download_id) {
+            let _ = pause_sender.send(false);
+        }
     }
 
     fn is_media_file(&self, download: &DownloadItem) -> bool {
