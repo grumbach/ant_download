@@ -492,20 +492,12 @@ impl AntDownloadApp {
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Action buttons
-                    let file_ready = matches!(download.status.state, DownloadState::Completed)
+                    let _file_ready = matches!(download.status.state, DownloadState::Completed)
                         && download
                             .save_path
                             .as_ref()
                             .map(|p| p.exists())
                             .unwrap_or(false);
-
-                    // Play button (only for media files)
-                    if file_ready && self.is_media_file(download) {
-                        if ui.small_button("▶ Play").clicked() {
-                            self.play_download(download);
-                        }
-                        ui.add_space(5.0);
-                    }
 
                     // Pause/Resume button (only for active downloads)
                     match &download.status.state {
@@ -535,47 +527,6 @@ impl AntDownloadApp {
     fn resume_download(&self, download_id: &str) {
         if let Some(pause_sender) = self.pause_senders.get(download_id) {
             let _ = pause_sender.send(false);
-        }
-    }
-
-    fn is_media_file(&self, download: &DownloadItem) -> bool {
-        if let Some(save_path) = &download.save_path {
-            if let Some(extension) = save_path.extension().and_then(|e| e.to_str()) {
-                let ext = extension.to_lowercase();
-                matches!(
-                    ext.as_str(),
-                    "mp4" | "mov" | "avi" | "mkv" | "webm" | "mp3" | "wav" | "flac" | "ogg" | "m4a"
-                )
-            } else {
-                false
-            }
-        } else {
-            false
-        }
-    }
-
-    fn play_download(&self, download: &DownloadItem) {
-        if let Some(save_file) = &download.save_path {
-            if save_file.exists() && download.file_size > 0 {
-                #[cfg(target_os = "macos")]
-                {
-                    let _ = std::process::Command::new("open").arg(save_file).spawn();
-                }
-
-                #[cfg(target_os = "windows")]
-                {
-                    let _ = std::process::Command::new("cmd")
-                        .args(["/C", "start", "", &save_file.to_string_lossy()])
-                        .spawn();
-                }
-
-                #[cfg(target_os = "linux")]
-                {
-                    let _ = std::process::Command::new("xdg-open")
-                        .arg(&save_file)
-                        .spawn();
-                }
-            }
         }
     }
 

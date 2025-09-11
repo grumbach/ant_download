@@ -61,6 +61,7 @@ cargo run --release
 
 ## Coming soon
 
-- Enhanced file management
+- Retry failed downloads
 - Download history
+- Resume downloads on app restart
 - Suggest more features by submitting or upvoting an issue on github
