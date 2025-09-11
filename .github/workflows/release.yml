@@ -14,17 +14,20 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
     steps:
       - uses: actions/checkout@v4
       
-      - name: Install musl tools
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools musl-dev
-          sudo apt-get install -y pkg-config libwayland-dev wayland-protocols libxkbcommon-dev 
-          pkg-config --modversion wayland-client
+          sudo apt-get install -y pkg-config libwayland-dev wayland-protocols libxkbcommon-dev libfontconfig1-dev
           rustup target add ${{ matrix.target }}
+          
+      - name: Install cross-compilation tools for ARM64
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
@@ -34,7 +37,7 @@ jobs:
           override: true
 
       - name: Install cross
-        if: matrix.target == 'aarch64-unknown-linux-musl'
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           cargo install cross
 
@@ -47,13 +50,15 @@ jobs:
 
       - name: Build x86_64
         uses: actions-rs/cargo@v1
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
         with:
           command: build
           args: --release --target ${{ matrix.target }}
 
-      - name: Build ARM
-        if: matrix.target == 'aarch64-unknown-linux-musl'
+      - name: Build ARM64
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        env:
+          PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig/
         run: cross build --release --target ${{ matrix.target }}
 
       - name: Package binary
@@ -180,7 +185,7 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            x86_64-unknown-linux-musl/AntDownload-x86_64-unknown-linux-musl.zip
-            aarch64-unknown-linux-musl/AntDownload-aarch64-unknown-linux-musl.zip
+            x86_64-unknown-linux-gnu/AntDownload-x86_64-unknown-linux-gnu.zip
+            aarch64-unknown-linux-gnu/AntDownload-aarch64-unknown-linux-gnu.zip
             x86_64-apple-darwin/AntDownload-x86_64-apple-darwin.zip
             aarch64-apple-darwin/AntDownload-aarch64-apple-darwin.zip
