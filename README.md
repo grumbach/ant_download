@@ -12,7 +12,7 @@ Liberate the world's knowledge — access it from anywhere
 
 ## Download it
 
-[Download the latest release on github with a click!](https://github.com/maidsafe/ant_download/releases/latest) 
+[Download the latest release on github with a click!](https://github.com/grumbach/ant_download/releases/latest) 
 
 > Mac users might face quarantine issues: `"AntDownload.app" is damaged and can't be opened. You should move it to the Trash.`
 >
