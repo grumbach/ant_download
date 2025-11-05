@@ -8,7 +8,7 @@ Download files that were uploaded to the network forever.
 
 Liberate the world's knowledge — access it from anywhere
 
-![](./assets/ant_down_local.png)
+![](./assets/recursion.png)
 
 ## Download it
 

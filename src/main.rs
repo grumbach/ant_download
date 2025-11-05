@@ -182,20 +182,103 @@ impl eframe::App for AntDownloadApp {
 }
 
 impl AntDownloadApp {
-    fn start_download(&mut self) {
-        let address = self.address_input.trim().to_string();
-        if address.is_empty() {
-            return;
+    fn parse_addresses(text: &str) -> Vec<(String, Option<String>)> {
+        let mut result = Vec::new();
+        let mut current_address: Option<String> = None;
+
+        for token in text.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
+            let token = token.trim();
+            if token.is_empty() {
+                continue;
+            }
+
+            // Check if this looks like an extension (starts with a dot)
+            if token.starts_with('.') {
+                // This is an extension for the previous address
+                if let Some(addr) = current_address.take() {
+                    result.push((addr, Some(token.to_string())));
+                }
+            } else {
+                // This is a new address
+                // First, save the previous address if any (without extension)
+                if let Some(addr) = current_address.take() {
+                    result.push((addr, None));
+                }
+                // Store this new address
+                current_address = Some(token.to_string());
+            }
         }
 
-        let save_path = match rfd::FileDialog::new()
-            .set_title("Save Downloaded File As")
-            .save_file()
-        {
-            Some(path) => path,
-            None => return, // User cancelled
-        };
+        // Don't forget the last address
+        if let Some(addr) = current_address {
+            result.push((addr, None));
+        }
 
+        result
+    }
+
+    fn start_download(&mut self) {
+        let addresses_with_extensions = Self::parse_addresses(&self.address_input);
+
+        match addresses_with_extensions.as_slice() {
+            [] => return, // No addresses
+            [(address, extension)] => {
+                // Single address: use file picker
+                let mut dialog = rfd::FileDialog::new()
+                    .set_title("Save Downloaded File As");
+
+                // Pre-fill filename with extension if provided
+                if let Some(ext) = extension {
+                    let filename = format!(
+                        "download_{}{}",
+                        address.chars().take(12).collect::<String>(),
+                        ext
+                    );
+                    dialog = dialog.set_file_name(&filename);
+                }
+
+                let save_path = match dialog.save_file() {
+                    Some(path) => path,
+                    None => return, // User cancelled
+                };
+
+                self.initiate_download(address.clone(), save_path);
+            }
+            _ => {
+                // Multiple addresses: use directory picker
+                let save_dir = match rfd::FileDialog::new()
+                    .set_title("Select Directory to Save Downloads")
+                    .pick_folder()
+                {
+                    Some(dir) => dir,
+                    None => return, // User cancelled
+                };
+
+                // Start downloads for each address
+                for (address, extension) in addresses_with_extensions {
+                    let filename = if let Some(ext) = extension {
+                        format!(
+                            "download_{}{}",
+                            address.chars().take(12).collect::<String>(),
+                            ext
+                        )
+                    } else {
+                        format!(
+                            "download_{}.ant",
+                            address.chars().take(12).collect::<String>()
+                        )
+                    };
+                    let save_path = save_dir.join(filename);
+                    self.initiate_download(address, save_path);
+                }
+            }
+        }
+
+        // Clear input for next download
+        self.address_input.clear();
+    }
+
+    fn initiate_download(&mut self, address: String, save_path: std::path::PathBuf) {
         // Generate unique download ID
         let download_id = format!(
             "{}_{}",
@@ -346,9 +429,6 @@ impl AntDownloadApp {
                 }
             }
         });
-
-        // Clear input for next download
-        self.address_input.clear();
     }
 
     fn show_downloads_list(&mut self, ui: &mut egui::Ui) {
